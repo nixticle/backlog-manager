@@ -1,1 +1,124 @@
-# backlog-manager
+# backlog-enricher
+
+`backlog-enricher` is a Linux-native ETL CLI that ingests your Backloggd backlog, enriches it with HowLongToBeat duration data, and exports clean datasets for analysis. The pipeline targets ≥99% match accuracy by defaulting uncertain cases to a human-in-the-loop review queue. No GUI is required; the only external services used are HTTP calls to Backloggd and HowLongToBeat public endpoints.
+
+## Accuracy & Safety Guarantees
+- Deterministic normalization and conservative matching prevent false positives.
+- Auto-matches require exact or high-confidence fuzzy scores and corroborating metadata.
+- Ambiguous cases (remakes, compilations, similar titles) are diverted to a manual review TUI.
+- Caching plus strict throttling respect remote services and enable pause/resume workflows.
+
+## Requirements
+- Linux (test target: Debian/Ubuntu/Fedora)
+- Python 3.11+
+- Network access for Backloggd/HLTB HTTP requests (no other services)
+- SQLite 3 (bundled with Python)
+
+## Quick Start
+```bash
+git clone https://example.com/backlog-enricher.git
+cd backlog-enricher
+make install          # creates .venv and installs in editable mode
+cp config.toml config.local.toml
+$EDITOR config.local.toml  # set backloggd.username, review other knobs
+. .venv/bin/activate
+backlog-enricher initdb --config config.local.toml
+backlog-enricher ingest --config config.local.toml
+backlog-enricher enrich --config config.local.toml
+backlog-enricher match --config config.local.toml
+backlog-enricher review --config config.local.toml
+backlog-enricher export --config config.local.toml
+```
+
+## Make Targets
+- `make venv` – create `.venv/` virtualenv with the configured Python.
+- `make install` – install `backlog-enricher` with `[dev]` extras.
+- `make test` – run pytest suite.
+- `make run CMD="match --config config.toml"` – wrapper for `python -m backlog_enricher.cli`.
+- `make fmt` – Ruff lint/format (optional, requires `[dev]` extras).
+
+## Configuration (`config.toml`)
+All paths are relative to the config file location.
+
+```toml
+[backloggd]
+username = "REPLACE_ME"    # Required Backloggd handle
+public_only = true         # Only scrape public pages
+
+[hltb]
+rate_limit_per_sec = 0.75  # Throttle between requests (0.5–1.0s)
+user_agent = "backlog-enricher/0.1 (+https://localhost)"
+max_retries = 5
+backoff_min_seconds = 2
+backoff_max_seconds = 60
+use_library = true         # Prefer howlongtobeatpy when installed
+fallback_html = true       # Fallback to HTML parsing if the library fails
+
+[match]
+fuzzy_auto = 95            # RapidFuzz token_set_ratio auto-accept threshold
+fuzzy_queue_min = 90       # Scores between fuzzy_queue_min and fuzzy_auto go to review
+year_tolerance = 1         # Accept +/- 1 year differences
+require_platform_overlap = true
+
+[paths]
+cache_dir = ".cache"
+db_path = "backlog.db"
+export_dir = "exports"
+
+[export]
+formats = ["csv","json"]   # Add "parquet" when pyarrow is installed
+
+[logging]
+level = "INFO"
+json = true
+```
+
+## Subcommands
+- `initdb` – apply schema/migrations in the configured SQLite database.
+- `ingest` – scrape Backloggd pages (0.5s throttle). `--dry-run` parses without writing.
+- `enrich` – query HLTB (disk cache + rate limiting). `--dry-run` skips DB writes.
+- `match` – deterministic + fuzzy matching; queues ambiguous cases. `--dry-run` simulates.
+- `review` – textual-based TUI to resolve queued matches (keys 1–5 select, `s` skip, `n/p` navigate, `o` open URL). `--dry-run` keeps DB unchanged.
+- `export` – produce CSV/JSON/Parquet files under `export_dir`.
+- `stats` – print counts: games, matches, queue, unresolved, cache entries.
+- `validate` – enforce invariants (foreign keys, unique matches, year/platform sanity).
+
+All mutating commands support `--dry-run` to validate behavior before committing changes.
+
+## ETL Workflow Guidance
+1. **Prepare configuration:** point `db_path`, `cache_dir`, and `export_dir` to persistent storage.
+2. **Ingest:** run nightly/weekly; the scraper stops automatically when no results remain.
+3. **Enrich:** respects HLTB rate limits; can be resumed safely after interruption (disk cache lives in `.cache/hltb`).
+4. **Match:** deterministic pass first, then fuzzy; rerun after manual reviews to apply decisions.
+5. **Review:** dedicate manual time to clear queue; decisions persist immediately.
+6. **Export:** schedule after match/review; outputs deterministic ordering for diff-friendly workflows.
+7. **Stats/Validate:** run `stats` and `validate` before committing results or exporting.
+
+For large collections (>10k games) or 24h+ sessions:
+- Split runs (`ingest`, `enrich`) across multiple invocations; work is idempotent.
+- Monitor logs (JSON by default) for `phase`, `query_key`, and retry diagnostics.
+- Use `--dry-run` before production runs on new datasets.
+
+## Logging & Diagnostics
+- Structured JSON logs to stdout; change `logging.json=false` for human-readable mode.
+- Logs include cache hits, query keys, retry counts, and throttled sleep durations.
+- `etl_runs` table is available for future auditing; populate as needed.
+
+## Limitations
+- Requires public Backloggd profiles; no authenticated scraping.
+- HLTB site structure may change—selectors include fallbacks but monitor failures.
+- Optional dependencies: `pyarrow` (Parquet exports) and `howlongtobeatpy` (API helper). The CLI degrades gracefully when they are absent.
+- No bulk import of private HLTB data; only public durations are sourced.
+
+## Ethics & Terms
+- Review Backloggd and HLTB terms of service before use. The CLI throttles requests and obeys robots.txt by default, but ultimate compliance is your responsibility.
+- Recommended for personal/private analytics; do not redistribute scraped raw data without permission.
+
+## Testing
+```bash
+make test
+```
+Pytest covers normalization, matching heuristics, HTML parsing, cache behavior, and invariant enforcement. Extend fixtures under `tests/data/` for regressions when site markup changes.
+
+## Contributing
+Pull requests and issue reports are welcome. Please include reproducible steps, configuration overrides, and logs (redacted as needed) when reporting problems.

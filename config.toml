@@ -1,0 +1,31 @@
+[backloggd]
+username = "REPLACE_ME"
+public_only = true
+
+[hltb]
+rate_limit_per_sec = 0.75
+user_agent = "backlog-enricher/0.1 (+https://localhost)"
+max_retries = 5
+backoff_min_seconds = 2
+backoff_max_seconds = 60
+use_library = true
+fallback_html = true
+
+[match]
+fuzzy_auto = 95
+fuzzy_queue_min = 90
+year_tolerance = 1
+require_platform_overlap = true
+
+[paths]
+cache_dir = ".cache"
+db_path = "backlog.db"
+export_dir = "exports"
+
+[export]
+formats = ["csv", "json"]
+
+[logging]
+level = "INFO"
+json = true
+

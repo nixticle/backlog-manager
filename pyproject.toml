@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=67", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "backlog-enricher"
+version = "0.1.0"
+description = "CLI ETL to enrich Backloggd backlogs with HowLongToBeat durations."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+  {name = "Backlog Enricher Maintainers"}
+]
+dependencies = [
+  "requests>=2.31",
+  "beautifulsoup4>=4.12",
+  "rapidfuzz>=3.2",
+  "orjson>=3.9",
+  "tenacity>=8.2",
+  "typing-extensions>=4.7",
+  "textual>=0.45",
+  "rich>=13.7"
+]
+
+[project.optional-dependencies]
+parquet = [
+  "pyarrow>=14.0"
+]
+dev = [
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+  "responses>=0.25",
+  "ruff>=0.3",
+  "mypy>=1.7"
+]
+
+[project.scripts]
+backlog-enricher = "backlog_enricher.cli:main"
+
+[tool.setuptools.package-dir]
+"" = "."
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["tests", "tests.*"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+select = ["E", "F", "I", "UP", "B", "S", "PL"]
+ignore = ["S101", "B905"]
+line-length = 100
+
+[tool.ruff.isort]
+known-first-party = ["backlog_enricher"]
