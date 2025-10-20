@@ -4,6 +4,7 @@ from typing import List
 
 from .config import Config
 from .db import Database
+from .normalize import norm_platform
 
 
 def run_validations(cfg: Config, db: Database) -> list[str]:
@@ -55,8 +56,17 @@ def run_validations(cfg: Config, db: Database) -> list[str]:
     )
     for row in platform_conflicts:
         platform_family = row["platform_family"]
-        if platform_family and platform_family not in (row["platforms"] or ""):
-            errors.append(f"Platform conflict for '{row['title']}': {platform_family} not in {row['platforms']}")
+        raw_platforms = row["platforms"] or ""
+        families = {
+            fam
+            for token in raw_platforms.split(",")
+            if token.strip()
+            for _, fam in [norm_platform(token.strip())]
+            if fam
+        }
+        if platform_family and families and platform_family not in families:
+            errors.append(
+                f"Platform conflict for '{row['title']}': expected {platform_family}, candidates families={sorted(families)}"
+            )
 
     return errors
-

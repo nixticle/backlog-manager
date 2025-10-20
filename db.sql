@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS idx_hltb_query_key ON hltb_results(query_key);
 CREATE TRIGGER IF NOT EXISTS trg_games_updated
 AFTER UPDATE ON games
 FOR EACH ROW
+WHEN NEW.updated_at <= OLD.updated_at
 BEGIN
-    UPDATE games SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = OLD.id;
+    UPDATE games SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = NEW.id;
 END;
-
