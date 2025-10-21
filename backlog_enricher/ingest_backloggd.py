@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
+import re
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Iterator, Optional
 
 import requests
 from bs4 import BeautifulSoup
@@ -45,7 +47,10 @@ def ingest_backlog(cfg: Config, db: Database, dry_run: bool = False) -> dict[str
         html = _fetch_page(session, username, collection, page)
         games = list(parse_backloggd_page(html))
         if not games:
-            LOG.info("no_more_results", extra={"page": page})
+            LOG.info(
+                "no_more_results",
+                extra={"page": page, "html_length": len(html), "has_content": bool(html.strip())},
+            )
             break
 
         pages_processed += 1
@@ -84,7 +89,7 @@ def _build_session(cfg: Config) -> requests.Session:
 
 
 def _fetch_page(session: requests.Session, username: str, collection: str, page: int) -> str:
-    slug = collection.strip("/") or "games"
+    slug = _slugify_collection_path(collection)
     base_host = BACKLOGGD_BASE_URL.replace("https://", "")
     headers: dict[str, str] = {}
     if getattr(session, "_override_ip", None):
@@ -94,6 +99,19 @@ def _fetch_page(session: requests.Session, username: str, collection: str, page:
         f"/u/{username}/{slug}/?page={page}",
         f"/u/{username}/games/{slug}/?page={page}",
     ]
+    if slug != "games" and "/" in slug:
+        # Backloggd historically allowed both `/u/<user>/<collection>/` and
+        # `/u/<user>/games/<collection>/`. When the collection contains nested
+        # segments we also try the final segment by itself to preserve backwards
+        # compatibility with older configs.
+        tail = slug.rsplit("/", 1)[-1]
+        candidate_paths.append(f"/u/{username}/{tail}/?page={page}")
+    candidate_paths.extend(
+        f"/u/{username}/{raw.strip('/') or 'games'}/?page={page}"
+        for raw in {collection, collection.lower()}
+        if raw and raw.strip("/")
+    )
+    candidate_paths = list(dict.fromkeys(candidate_paths))
     last_exc: Exception | None = None
     for path in candidate_paths:
         url = f"https://{override_ip or base_host}{path}"
@@ -107,6 +125,10 @@ def _fetch_page(session: requests.Session, username: str, collection: str, page:
                     f"Failed to fetch Backloggd page {page} ({path}): {response.status_code}"
                 )
                 continue
+            LOG.debug(
+                "backloggd_fetch_success",
+                extra={"url": url, "status": response.status_code, "length": len(response.text)},
+            )
             return response.text
         except requests.RequestException as exc:  # pragma: no cover - network
             last_exc = exc
@@ -140,6 +162,12 @@ def _fetch_page_via_curl(host: str, path: str, override_ip: str | None) -> str |
 
 def parse_backloggd_page(html: str) -> Iterable[BackloggdGame]:
     soup = BeautifulSoup(html, "html.parser")
+    nuxt_games = list(_parse_games_from_nuxt_payload(soup))
+    if nuxt_games:
+        LOG.debug("parsed_backloggd_games", extra={"source": "nuxt", "count": len(nuxt_games)})
+        yield from nuxt_games
+        return
+
     card_selectors = [
         ".card.game-card",
         ".game-card.card",
@@ -155,8 +183,12 @@ def parse_backloggd_page(html: str) -> Iterable[BackloggdGame]:
     if not cards:
         cards = soup.select("[data-game-id]")
     if not cards:
-        LOG.warning("no_cards_found")
+        LOG.warning(
+            "backloggd_no_cards_found",
+            extra={"html_excerpt": html[:200], "nuxt_detected": bool(nuxt_games)},
+        )
         return []
+    yielded = 0
     for card in cards:
         title = _extract_title(card)
         if not title:
@@ -167,6 +199,7 @@ def parse_backloggd_page(html: str) -> Iterable[BackloggdGame]:
         rating = _extract_rating(card)
         source_id = _extract_source_from_card(card)
 
+        yielded += 1
         yield BackloggdGame(
             title=title,
             platform=platform,
@@ -175,6 +208,8 @@ def parse_backloggd_page(html: str) -> Iterable[BackloggdGame]:
             rating=rating,
             source_id=source_id,
         )
+    if yielded:
+        LOG.debug("parsed_backloggd_games", extra={"source": "dom", "count": yielded})
 
 
 def _extract_title(card: Any) -> str | None:
@@ -256,6 +291,144 @@ def _extract_source_id(href: str) -> Optional[str]:
     parts = href.rstrip("/").split("/")
     if parts:
         return parts[-1]
+    return None
+
+
+def _slugify_collection_path(collection: str) -> str:
+    collection = collection or ""
+    stripped = collection.strip("/")
+    if not stripped:
+        return "games"
+
+    parts = [segment for segment in re.split(r"/+", stripped) if segment]
+    if not parts:
+        return "games"
+
+    slugged: list[str] = []
+    for part in parts:
+        normalized = re.sub(r"[^a-z0-9\-]+", "-", part.lower())
+        normalized = re.sub(r"-+", "-", normalized).strip("-")
+        slugged.append(normalized or part.lower())
+    return "/".join(slugged)
+
+
+def _parse_games_from_nuxt_payload(soup: BeautifulSoup) -> Iterator[BackloggdGame]:
+    scripts = soup.find_all("script")
+    seen: set[tuple[str, str | None, str | None]] = set()
+    for script in scripts:
+        text = script.string or script.get_text(strip=True)
+        if not text or "__NUXT__" not in text:
+            continue
+        match = re.search(r"window\.__NUXT__\s*=\s*", text)
+        if not match:
+            continue
+        snippet = text[match.end():].lstrip()
+        if not snippet:
+            continue
+        try:
+            payload, _ = json.JSONDecoder().raw_decode(snippet)
+        except json.JSONDecodeError:
+            LOG.debug("nuxt_payload_decode_failed")
+            continue
+        for node in _walk_nuxt_payload(payload):
+            game = _game_from_nuxt_node(node)
+            if not game:
+                continue
+            fingerprint = (game.title.lower(), game.platform or "", game.source_id or "")
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            yield game
+
+
+def _walk_nuxt_payload(value: Any) -> Iterator[dict[str, Any]]:
+    if isinstance(value, dict):
+        yield value
+        for sub in value.values():
+            yield from _walk_nuxt_payload(sub)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_nuxt_payload(item)
+
+
+def _game_from_nuxt_node(node: dict[str, Any]) -> BackloggdGame | None:
+    title = node.get("title") or node.get("name") or node.get("gameTitle")
+    if not title:
+        return None
+
+    potential_keys = {
+        "platform",
+        "platforms",
+        "releaseYear",
+        "year",
+        "status",
+        "playState",
+        "rating",
+        "score",
+        "slug",
+        "id",
+        "objectID",
+        "gameId",
+        "game_id",
+    }
+    if not potential_keys.intersection(node.keys()):
+        return None
+
+    platform = _extract_platform_from_node(node)
+    year_value = node.get("year") or node.get("releaseYear") or node.get("release_year")
+    if isinstance(year_value, int):
+        year = year_value
+    else:
+        year = _parse_year(str(year_value)) if year_value else None
+
+    status = node.get("status") or node.get("playState") or node.get("play_state")
+    rating_value = node.get("rating") or node.get("score")
+    if isinstance(rating_value, (int, float)):
+        rating = float(rating_value)
+    else:
+        rating = _parse_rating(str(rating_value)) if rating_value is not None else None
+
+    source_id = _extract_source_id_from_node(node)
+
+    return BackloggdGame(
+        title=title,
+        platform=platform,
+        year=year,
+        status=status,
+        rating=rating,
+        source_id=source_id,
+    )
+
+
+def _extract_platform_from_node(node: dict[str, Any]) -> str | None:
+    platform = node.get("platform")
+    if isinstance(platform, dict):
+        platform = platform.get("title") or platform.get("name")
+    if isinstance(platform, list):
+        platform = platform[0] if platform else None
+    if not platform:
+        platforms = node.get("platforms")
+        if isinstance(platforms, list) and platforms:
+            first = platforms[0]
+            if isinstance(first, dict):
+                platform = first.get("title") or first.get("name")
+            else:
+                platform = first
+    if isinstance(platform, str):
+        return platform.strip() or None
+    return None
+
+
+def _extract_source_id_from_node(node: dict[str, Any]) -> str | None:
+    for key in ("slug", "id", "objectID", "gameId", "game_id"):
+        value = node.get(key)
+        if value is None:
+            continue
+        if isinstance(value, dict):
+            value = value.get("slug") or value.get("id")
+        if value is None:
+            continue
+        return str(value)
     return None
 
 
