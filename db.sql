@@ -14,8 +14,7 @@ CREATE TABLE IF NOT EXISTS games (
     platform_family TEXT,
     source_id TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    UNIQUE(title_norm, COALESCE(platform_family, ''), COALESCE(year, 0))
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 CREATE TABLE IF NOT EXISTS hltb_results (
@@ -59,6 +58,22 @@ CREATE TABLE IF NOT EXISTS etl_runs (
 
 CREATE INDEX IF NOT EXISTS idx_games_title_norm ON games(title_norm);
 CREATE INDEX IF NOT EXISTS idx_games_platform_family ON games(platform_family);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uidx_games_full
+ON games(title_norm, platform_family, year)
+WHERE platform_family IS NOT NULL AND year IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uidx_games_platform
+ON games(title_norm, platform_family)
+WHERE platform_family IS NOT NULL AND year IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uidx_games_year
+ON games(title_norm, year)
+WHERE platform_family IS NULL AND year IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uidx_games_title
+ON games(title_norm)
+WHERE platform_family IS NULL AND year IS NULL;
 CREATE INDEX IF NOT EXISTS idx_hltb_query_key ON hltb_results(query_key);
 
 CREATE TRIGGER IF NOT EXISTS trg_games_updated

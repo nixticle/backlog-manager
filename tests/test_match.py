@@ -41,10 +41,9 @@ def test_decide_match_collision_queues():
 def test_decide_match_fuzzy_accepts_clear_case():
     game = GameRow(id=1, title="Hollow Knight", title_norm="hollow knight", platform_family="pc", year=2017)
     candidates = [
-        build_candidate("Hollow Knight", ["PC"], 2017, {"pc"}),
+        build_candidate("Hollow Knight: Godmaster", ["PC"], 2017, {"pc"}),
     ]
     config = MatchConfig(fuzzy_auto=90, fuzzy_queue_min=80)
     decision = decide_match(game, candidates, config)
     assert decision.status == "match"
     assert decision.method == "fuzzy_auto"
-

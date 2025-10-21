@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 import time
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 import requests
 from bs4 import BeautifulSoup
@@ -13,7 +14,7 @@ from .db import Database
 from .normalize import norm_platform, norm_title, platform_family
 
 LOG = logging.getLogger(__name__)
-BACKLOGGD_BASE_URL = "https://www.backloggd.com"
+BACKLOGGD_BASE_URL = "https://backloggd.com"
 
 
 @dataclass(slots=True)
@@ -33,14 +34,15 @@ class BackloggdIngestError(Exception):
 def ingest_backlog(cfg: Config, db: Database, dry_run: bool = False) -> dict[str, int]:
     session = _build_session(cfg)
     username = cfg.backloggd.username
+    collection = cfg.backloggd.collection
     page = 1
     total_inserted = 0
     total_seen = 0
     pages_processed = 0
 
     while True:
-        LOG.info("fetch_backlog_page", extra={"page": page})
-        html = _fetch_page(session, username, page)
+        LOG.info("fetch_backlog_page", extra={"page": page, "collection": collection})
+        html = _fetch_page(session, username, collection, page)
         games = list(parse_backloggd_page(html))
         if not games:
             LOG.info("no_more_results", extra={"page": page})
@@ -75,15 +77,65 @@ def _build_session(cfg: Config) -> requests.Session:
             "Accept": "text/html,application/xhtml+xml",
         }
     )
+    if cfg.backloggd.host_override_ip:
+        session.trust_env = False
+        setattr(session, "_override_ip", cfg.backloggd.host_override_ip)
     return session
 
 
-def _fetch_page(session: requests.Session, username: str, page: int) -> str:
-    url = f"{BACKLOGGD_BASE_URL}/u/{username}/games/?page={page}"
-    response = session.get(url, timeout=(10, 30))
-    if response.status_code >= 400:
-        raise BackloggdIngestError(f"Failed to fetch Backloggd page {page}: {response.status_code}")
-    return response.text
+def _fetch_page(session: requests.Session, username: str, collection: str, page: int) -> str:
+    slug = collection.strip("/") or "games"
+    base_host = BACKLOGGD_BASE_URL.replace("https://", "")
+    headers: dict[str, str] = {}
+    if getattr(session, "_override_ip", None):
+        headers["Host"] = base_host
+    override_ip = getattr(session, "_override_ip", None)
+    candidate_paths = [
+        f"/u/{username}/{slug}/?page={page}",
+        f"/u/{username}/games/{slug}/?page={page}",
+    ]
+    last_exc: Exception | None = None
+    for path in candidate_paths:
+        url = f"https://{override_ip or base_host}{path}"
+        try:
+            response = session.get(url, timeout=(10, 30), headers=headers or None)
+            if response.status_code == 404:
+                last_exc = BackloggdIngestError(f"Backloggd page not found: {path}")
+                continue
+            if response.status_code >= 400:
+                last_exc = BackloggdIngestError(
+                    f"Failed to fetch Backloggd page {page} ({path}): {response.status_code}"
+                )
+                continue
+            return response.text
+        except requests.RequestException as exc:  # pragma: no cover - network
+            last_exc = exc
+            LOG.warning("requests_fetch_failed", extra={"url": url, "error": str(exc)})
+            html = _fetch_page_via_curl(base_host, path, override_ip)
+            if html is not None:
+                return html
+    if last_exc:
+        raise last_exc
+    raise BackloggdIngestError("Failed to fetch Backloggd page with any known path.")
+
+
+def _fetch_page_via_curl(host: str, path: str, override_ip: str | None) -> str | None:
+    url = f"https://{host}{path}"
+    cmd = ["curl", "-fsSL", url]
+    if override_ip:
+        cmd = ["curl", "-fsSL", "--resolve", f"{host}:443:{override_ip}", url]
+    try:
+        result = subprocess.run(cmd, capture_output=True, check=False, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover - curl missing
+        LOG.error("curl_fetch_failed", extra={"url": url, "error": str(exc)})
+        return None
+    if result.returncode != 0:
+        LOG.warning(
+            "curl_nonzero_exit",
+            extra={"url": url, "code": result.returncode, "stderr": result.stderr[:200]},
+        )
+        return None
+    return result.stdout
 
 
 def parse_backloggd_page(html: str) -> Iterable[BackloggdGame]:
@@ -92,35 +144,28 @@ def parse_backloggd_page(html: str) -> Iterable[BackloggdGame]:
         ".card.game-card",
         ".game-card.card",
         ".gamedetails-card",
+        ".game-card",
+        ".games-list > li",
     ]
-    cards = []
+    cards: list[Any] = []
     for selector in card_selectors:
         cards = soup.select(selector)
         if cards:
             break
     if not cards:
+        cards = soup.select("[data-game-id]")
+    if not cards:
         LOG.warning("no_cards_found")
         return []
     for card in cards:
-        title_elem = card.select_one(".game-title, .card-title a, h2 a")
-        if not title_elem or not title_elem.text.strip():
+        title = _extract_title(card)
+        if not title:
             continue
-        title = title_elem.text.strip()
-
-        platform_elem = card.select_one(".platform, .game-platform, .badge-platform")
-        platform = platform_elem.text.strip() if platform_elem and platform_elem.text else None
-
-        year_elem = card.select_one(".release-year, .year, .meta span")
-        year = _parse_year(year_elem.text if year_elem else None)
-
-        status_elem = card.select_one(".status, .badge-status, .game-status")
-        status = status_elem.text.strip() if status_elem and status_elem.text else None
-
-        rating_elem = card.select_one(".rating, .score, .game-rating")
-        rating = _parse_rating(rating_elem.text if rating_elem else None)
-
-        source_link = card.select_one("a[href*='/games/']")
-        source_id = _extract_source_id(source_link["href"]) if source_link and source_link.get("href") else None
+        platform = _extract_platform(card)
+        year = _extract_year(card)
+        status = _extract_status(card)
+        rating = _extract_rating(card)
+        source_id = _extract_source_from_card(card)
 
         yield BackloggdGame(
             title=title,
@@ -130,6 +175,63 @@ def parse_backloggd_page(html: str) -> Iterable[BackloggdGame]:
             rating=rating,
             source_id=source_id,
         )
+
+
+def _extract_title(card: Any) -> str | None:
+    attr_title = getattr(card, "get", lambda *_: None)("data-title") or getattr(card, "get", lambda *_: None)("data-game-title")
+    if attr_title:
+        return attr_title.strip()
+    title_elem = card.select_one(
+        ".game-title, .card-title a, .card-title, h2 a, h2, h3 a, h3, .media-title, a.title"
+    )
+    if title_elem and title_elem.text:
+        return title_elem.text.strip()
+    return None
+
+
+def _extract_platform(card: Any) -> str | None:
+    attr = getattr(card, "get", lambda *_: None)("data-platform")
+    if attr:
+        return attr.strip()
+    platform_elem = card.select_one(
+        ".platform, .game-platform, .badge-platform, .platform-badge, .meta-platform, .platforms span"
+    )
+    if platform_elem and platform_elem.text:
+        return platform_elem.text.strip()
+    return None
+
+
+def _extract_year(card: Any) -> int | None:
+    attr = getattr(card, "get", lambda *_: None)("data-year")
+    if attr:
+        return _parse_year(str(attr))
+    year_elem = card.select_one(".release-year, .year, .meta span, .meta-year, .year-tag")
+    return _parse_year(year_elem.text if year_elem else None)
+
+
+def _extract_status(card: Any) -> str | None:
+    attr = getattr(card, "get", lambda *_: None)("data-status")
+    if attr:
+        return str(attr).strip()
+    status_elem = card.select_one(".status, .badge-status, .game-status, .status-tag, .play-state")
+    if status_elem and status_elem.text:
+        return status_elem.text.strip()
+    return None
+
+
+def _extract_rating(card: Any) -> float | None:
+    attr = getattr(card, "get", lambda *_: None)("data-rating")
+    if attr:
+        return _parse_rating(str(attr))
+    rating_elem = card.select_one(".rating, .score, .game-rating, .rating-value")
+    return _parse_rating(rating_elem.text if rating_elem else None)
+
+
+def _extract_source_from_card(card: Any) -> str | None:
+    link = card.select_one("a[href*='/game']") or card.select_one("a[href*='/games/']")
+    if link and link.get("href"):
+        return _extract_source_id(link["href"])
+    return None
 
 
 def _parse_year(value: Optional[str]) -> Optional[int]:

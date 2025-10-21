@@ -14,6 +14,7 @@ def test_invariants_fail_for_missing_results(tmp_path):
     init_database(cfg)
 
     with connect_database(cfg) as db:
+        db.execute("PRAGMA foreign_keys = OFF")
         title = "Chrono Trigger"
         title_norm = norm_title(title)
         platform_norm, family = norm_platform("SNES")
@@ -26,7 +27,7 @@ def test_invariants_fail_for_missing_results(tmp_path):
             "INSERT INTO matches (game_id, hltb_id, confidence, method, decided_by) VALUES (?, ?, ?, ?, ?)",
             [1, 999, 0.9, "exact", "auto"],
         )
+        db.execute("PRAGMA foreign_keys = ON")
         errors = run_validations(cfg, db)
 
     assert errors
-

@@ -111,9 +111,13 @@ def _normalize_unicode(value: str) -> str:
 
 
 def _strip_trademarks(value: str) -> str:
+    symbols = ["™", "®", "©"]
+    for symbol in symbols:
+        value = value.replace(symbol, " ")
     value = value.replace("(tm)", " ").replace("(TM)", " ")
     value = value.replace("(r)", " ").replace("(R)", " ")
     value = value.replace("(c)", " ").replace("(C)", " ")
+    value = re.sub(r"(?i)(?<=\w)tm\b", " ", value)
     return value
 
 

@@ -147,11 +147,11 @@ def decide_match(game: GameRow, candidates: list[CandidateView], config: MatchCo
 
     exact = _deterministic_exact(game, candidates)
     if exact:
-        return Decision(status="match", method="exact", confidence=1.0, candidate=exact.candidate)
+        return Decision(status="match", method="exact", confidence=1.0, candidate=exact)
 
     relaxed = _deterministic_relaxed(game, candidates, config.year_tolerance)
     if relaxed:
-        return Decision(status="match", method="exact_relaxed", confidence=0.95, candidate=relaxed.candidate)
+        return Decision(status="match", method="exact_relaxed", confidence=0.95, candidate=relaxed)
 
     fuzzy = _fuzzy_match(game, candidates, config)
     if fuzzy.status == "match":

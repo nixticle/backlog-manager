@@ -2,7 +2,6 @@
 username = "oldgames"
 public_only = true
 collection = "backlog"
-# host_override_ip = "103.180.114.1"  # Uncomment if DNS resolution fails
 
 [hltb]
 rate_limit_per_sec = 0.75

@@ -18,6 +18,8 @@ class ConfigError(Exception):
 class BackloggdConfig:
     username: str
     public_only: bool = True
+    collection: str = "games"
+    host_override_ip: str | None = None
 
 
 @dataclass(slots=True)
@@ -43,12 +45,12 @@ class MatchConfig:
 class PathsConfig:
     cache_dir: str = ".cache"
     db_path: str = "backlog.db"
-    export_dir: str = "exports"
+    export_dir: str = "."
 
 
 @dataclass(slots=True)
 class ExportConfig:
-    formats: list[str] = field(default_factory=lambda: ["csv", "json"])
+    formats: list[str] = field(default_factory=lambda: ["csv"])
 
 
 @dataclass(slots=True)
@@ -109,10 +111,15 @@ def _build_config(data: Mapping[str, Any], path: Path) -> Config:
     if not isinstance(username, str) or not username.strip():
         raise ConfigError("backloggd.username must be a non-empty string.")
 
+    collection = str(backloggd.get("collection", "games")).strip()
+    collection = collection.strip("/") or "games"
+
     cfg = Config(
         backloggd=BackloggdConfig(
             username=username.strip(),
             public_only=bool(backloggd.get("public_only", True)),
+            collection=collection,
+            host_override_ip=_optional_str(backloggd.get("host_override_ip")),
         ),
         hltb=_load_section(HLTBConfig, data.get("hltb", {})),
         match=_load_section(MatchConfig, data.get("match", {})),
@@ -134,6 +141,15 @@ def _load_section(cls: type[Any], values: Mapping[str, Any] | None) -> Any:
     return cls(**init_args)  # type: ignore[arg-type]
 
 
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed or None
+    return str(value).strip() or None
+
+
 def _validate_config(cfg: Config) -> None:
     if cfg.hltb.rate_limit_per_sec <= 0:
         raise ConfigError("hltb.rate_limit_per_sec must be positive.")
@@ -141,6 +157,12 @@ def _validate_config(cfg: Config) -> None:
         raise ConfigError("hltb.max_retries must be at least 1.")
     if not 0 <= cfg.match.fuzzy_queue_min <= cfg.match.fuzzy_auto <= 100:
         raise ConfigError("match.fuzzy_queue_min <= match.fuzzy_auto <= 100 must hold.")
+    if not cfg.backloggd.collection:
+        raise ConfigError("backloggd.collection must be a non-empty slug.")
+    if cfg.backloggd.host_override_ip:
+        cfg.backloggd.host_override_ip = cfg.backloggd.host_override_ip.strip()
+        if not cfg.backloggd.host_override_ip:
+            cfg.backloggd.host_override_ip = None
 
 
 def ensure_directories(cfg: Config) -> None:
@@ -168,4 +190,3 @@ def apply_overrides(cfg: Config, overrides: Iterable[tuple[str, Any]]) -> Config
         setattr(section, sub, value)
     _validate_config(cfg)
     return cfg
-

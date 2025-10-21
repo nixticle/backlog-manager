@@ -57,13 +57,14 @@ def run_validations(cfg: Config, db: Database) -> list[str]:
     for row in platform_conflicts:
         platform_family = row["platform_family"]
         raw_platforms = row["platforms"] or ""
-        families = {
-            fam
-            for token in raw_platforms.split(",")
-            if token.strip()
-            for _, fam in [norm_platform(token.strip())]
-            if fam
-        }
+        families = set()
+        for token in raw_platforms.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            _, fam = norm_platform(token)
+            if fam:
+                families.add(fam)
         if platform_family and families and platform_family not in families:
             errors.append(
                 f"Platform conflict for '{row['title']}': expected {platform_family}, candidates families={sorted(families)}"

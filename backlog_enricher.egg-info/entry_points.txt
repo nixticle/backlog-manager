@@ -1,0 +1,2 @@
+[console_scripts]
+backlog-enricher = backlog_enricher.cli:main

@@ -14,33 +14,16 @@ import logging
 LOG = logging.getLogger(__name__)
 
 
-COLUMNS = [
-    "title",
-    "platform",
-    "year",
-    "status",
-    "rating",
-    "hltb_main",
-    "hltb_main_extra",
-    "hltb_complete",
-    "hltb_votes",
-    "confidence",
-    "method",
-    "decided_by",
-]
+COLUMNS = ["title", "year", "hltb_main", "hltb_complete"]
 
 
 def export_data(cfg: Config, db: Database, formats: Sequence[str]) -> dict[str, Path]:
     rows = db.query(
         """
-        SELECT g.title, g.platform, g.year, g.status, g.rating,
+        SELECT g.title,
+               g.year,
                h.main AS hltb_main,
-               h.main_extra AS hltb_main_extra,
-               h.complete AS hltb_complete,
-               h.votes AS hltb_votes,
-               m.confidence,
-               m.method,
-               m.decided_by
+               h.complete AS hltb_complete
         FROM games g
         LEFT JOIN matches m ON g.id = m.game_id
         LEFT JOIN hltb_results h ON m.hltb_id = h.id

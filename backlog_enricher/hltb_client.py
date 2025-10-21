@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, List
@@ -81,7 +81,7 @@ class HLTBClient:
             self.metrics["errors"] += 1
             raise
         self.metrics["fetched"] += 1
-        cache_path.write_bytes(orjson.dumps([candidate.__dict__ for candidate in candidates]))
+        cache_path.write_bytes(orjson.dumps([asdict(candidate) for candidate in candidates]))
         return candidates, False
 
     def _fetch_with_retry(self, query: HLTBQuery) -> list[HLTBCandidate]:
@@ -302,7 +302,7 @@ def store_results(
             "complete": top.complete,
             "votes": top.votes,
         }
-    raw_json = orjson.dumps([candidate.__dict__ for candidate in candidates]).decode("utf-8")
+    raw_json = orjson.dumps([asdict(candidate) for candidate in candidates]).decode("utf-8")
     fetched_at = datetime.now(tz=timezone.utc).isoformat()
     sql = (
         "INSERT OR REPLACE INTO hltb_results "

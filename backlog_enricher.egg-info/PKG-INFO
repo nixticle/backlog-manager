@@ -1,3 +1,30 @@
+Metadata-Version: 2.4
+Name: backlog-enricher
+Version: 0.1.0
+Summary: CLI ETL to enrich Backloggd backlogs with HowLongToBeat durations.
+Author: Backlog Enricher Maintainers
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: requests>=2.31
+Requires-Dist: beautifulsoup4>=4.12
+Requires-Dist: rapidfuzz>=3.2
+Requires-Dist: orjson>=3.9
+Requires-Dist: tenacity>=8.2
+Requires-Dist: typing-extensions>=4.7
+Requires-Dist: textual>=0.45
+Requires-Dist: rich>=13.7
+Provides-Extra: parquet
+Requires-Dist: pyarrow>=14.0; extra == "parquet"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4; extra == "dev"
+Requires-Dist: pytest-cov>=4.1; extra == "dev"
+Requires-Dist: responses>=0.25; extra == "dev"
+Requires-Dist: ruff>=0.3; extra == "dev"
+Requires-Dist: mypy>=1.7; extra == "dev"
+Dynamic: license-file
+
 # backlog-enricher
 
 `backlog-enricher` is a Linux-native ETL CLI that ingests your Backloggd backlog, enriches it with HowLongToBeat duration data, and exports clean datasets for analysis. The pipeline targets ≥99% match accuracy by defaulting uncertain cases to a human-in-the-loop review queue. No GUI is required; the only external services used are HTTP calls to Backloggd and HowLongToBeat public endpoints.

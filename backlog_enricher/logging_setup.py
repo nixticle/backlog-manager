@@ -11,6 +11,30 @@ import orjson
 from .config import Config
 
 
+DEFAULT_RECORD_ATTRS = {
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+}
+
+
 class JSONFormatter(logging.Formatter):
     """Emit structured JSON logs."""
 
@@ -26,12 +50,7 @@ class JSONFormatter(logging.Formatter):
         extra = {
             key: value
             for key, value in record.__dict__.items()
-            if key not in logging.LogRecord.__slots__
-            and key
-            not in {"name", "msg", "args", "levelname", "levelno", "pathname", "filename",
-                    "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
-                    "created", "msecs", "relativeCreated", "thread", "threadName",
-                    "processName", "process"}
+            if key not in DEFAULT_RECORD_ATTRS
         }
         if extra:
             base.update(_serialize_extra(extra))
@@ -62,4 +81,3 @@ def configure_logging(cfg: Config) -> None:
         fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
         handler.setFormatter(logging.Formatter(fmt=fmt))
     root.addHandler(handler)
-
